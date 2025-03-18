@@ -6,7 +6,7 @@ PROGRAMS = {
     "VSCode": "code",
     "Microsoft To-Do": "start ms-to-do:",
     "Calculadora": "calc",
-    "Blender": r'"C:\Program Files\Blender Foundation\Blender 4.2\blender.exe"', 
+    "Blender": r'"C:\Program Files\Blender Foundation\Blender 4.3\blender.exe"', 
 }
 
 def open_program(command):
