@@ -2,6 +2,7 @@ import os
 import win32com.client
 from pathlib import Path
 import tkinter
+import re
 
 START_MENU_PATHS = [
     os.getenv("APPDATA") + r"\Microsoft\Windows\Start Menu\Programs",
@@ -14,8 +15,6 @@ EXCLUDE_KEYWORDS = [
     'diagnostic', 'debug', 'repair', 'support', 'tool', 'setup', 'install',
     "desinstalar", "desinstalador", "desinstalación", "uninstaller", "unins"
 ]
-
-BROWSERS = ["chrome", "brave", "edge"]
 
 def get_shortcut_target(path):
     shell = win32com.client.Dispatch("WScript.Shell")
@@ -50,17 +49,6 @@ def ask_user_selection(app_list):
     selected = input("\nIngresa los números de las apps que deseas abrir (separados por comas): ")
     indices = [int(x.strip()) - 1 for x in selected.split(",") if x.strip().isdigit()]
     return [app_list[i] for i in indices if 0 <= i < len(app_list)]
-
-def get_browser_urls():
-    urls = []
-    print("\nHas elegido un navegador. Ingresa las URLs que quieres abrir (una por línea).")
-    print("Presiona Enter sin escribir nada para terminar.")
-    while True:
-        url = input("URL: ").strip()
-        if not url:
-            break
-        urls.append(url)
-    return urls
 
 def get_screen_resolution():
     root = tkinter.Tk()
@@ -110,29 +98,104 @@ def assign_apps_to_positions(apps, positions):
         assignments.append((apps[choice], pos))
     return assignments
 
-def generate_bat(assignments, chrome_path, nircmd_path, output_path="launch_split.bat"):
-    lines = ['@echo off']
-    lines.append(f'set NIRCMD_PATH="{nircmd_path}"')
-    lines.append(f'set CHROME_PATH="{chrome_path}"')
-    lines.append('')
+def generate_close_script(assignments, filename="close_apps.py"):
+    import re
+
+    script_lines = [
+        "import re",
+        "import pygetwindow as gw",
+        "",
+        "# Lista de patrones para cerrar ventanas",
+        "apps = ["
+    ]
 
     for (name, path), (x, y, w, h) in assignments:
-        exe_lower = path.lower()
-        if any(browser in exe_lower for browser in BROWSERS):
-            urls = get_browser_urls()
-            for url in urls:
-                lines.append(f'start "" %CHROME_PATH% --app={url}')
-                window_title = url.split("//")[-1].split("/")[0]
-                lines.append(f'timeout /t 2 >nul')
-                lines.append(f'%NIRCMD_PATH% win move ititle "{window_title}" {x} {y} {w} {h}')
-        else:
-            lines.append(f'start "" "{path}"')
-            lines.append(f'timeout /t 2 >nul')
-            lines.append(f'%NIRCMD_PATH% win move ititle "{name}" {x} {y} {w} {h}')
+        pattern = re.escape(name.lower())
+        script_lines.append(f"    r'{pattern}',")
 
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
-    print(f"\nArchivo BAT generado exitosamente: {output_path}")
+    script_lines.append("]")
+    script_lines.append("")
+    script_lines.append("def close_windows():")
+    script_lines.append("    all_windows = gw.getAllWindows()")
+    script_lines.append("    closed = 0")
+    script_lines.append("    for window in all_windows:")
+    script_lines.append("        for pattern in apps:")
+    script_lines.append("            if re.search(pattern, window.title, re.IGNORECASE):")
+    script_lines.append("                try:")
+    script_lines.append("                    window.close()")
+    script_lines.append("                    print(f'✔ Cerrada ventana: {window.title}')")
+    script_lines.append("                    closed += 1")
+    script_lines.append("                except Exception as e:")
+    script_lines.append("                    print(f'⚠ No se pudo cerrar ventana: {window.title} - {e}')")
+    script_lines.append("                break")
+    script_lines.append("    if closed == 0:")
+    script_lines.append("        print('❌ No se encontraron ventanas para cerrar.')")
+    script_lines.append("")
+    script_lines.append("if __name__ == '__main__':")
+    script_lines.append("    close_windows()")
+
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write("\n".join(script_lines))
+
+    print(f"\n✅ Script generado para cerrar ventanas: {filename}")
+    print("Ejecuta con: python close_apps.py")
+
+
+def generate_py_script(assignments, filename="launch_split.py"):
+    import os
+
+    script_lines = [
+        "import subprocess",
+        "import time",
+        "import re",
+        "import pygetwindow as gw",
+        "",
+        "# Lista de aplicaciones con sus posiciones y patrón regex para título",
+        "apps = ["
+    ]
+
+    for (name, path), (x, y, w, h) in assignments:
+        # Para el patrón regex usamos el nombre de la app, en minúsculas
+        pattern = re.escape(name.lower())
+        # Para command, cadena raw para evitar problemas con backslashes
+        command = f'r"{path}"'
+        script_lines.append("    {")
+        script_lines.append(f"        'command': {command},")
+        script_lines.append(f"        'pattern': r'{pattern}',")
+        script_lines.append(f"        'position': ({x}, {y}, {w}, {h}),")
+        script_lines.append("    },")
+    script_lines.append("]")
+    script_lines.append("")
+    script_lines.append("def launch_and_position(app):")
+    script_lines.append("    print(f\"Lanzando: {app['command']}\")")
+    script_lines.append("    subprocess.Popen(app['command'], shell=True)")
+    script_lines.append("    time.sleep(3)")
+    script_lines.append("    window = None")
+    script_lines.append("    for w in gw.getAllWindows():")
+    script_lines.append("        if re.search(app['pattern'], w.title, re.IGNORECASE):")
+    script_lines.append("            window = w")
+    script_lines.append("            break")
+    script_lines.append("    if window:")
+    script_lines.append("        x, y, w_, h_ = app['position']")
+    script_lines.append("        try:")
+    script_lines.append("            window.moveTo(x, y)")
+    script_lines.append("            window.resizeTo(w_, h_)")
+    script_lines.append("            print(f\"✔ Posicionada: {window.title}\")")
+    script_lines.append("        except Exception as e:")
+    script_lines.append("            print(f\"⚠ No se pudo mover: {e}\")")
+    script_lines.append("    else:")
+    script_lines.append("        print(f\"❌ No se encontró ventana que coincida con el patrón: {app['pattern']}\")")
+    script_lines.append("")
+    script_lines.append("for app in apps:")
+    script_lines.append("    launch_and_position(app)")
+    script_lines.append("")
+    script_lines.append("print('✅ Todas las apps fueron abiertas y posicionadas.')")
+
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write("\n".join(script_lines))
+
+    print(f"\n✅ Script generado: {filename}")
+    print("Ejecuta con: python launch_split.py")
 
 # ------------------------------
 # EJECUCIÓN PRINCIPAL
@@ -150,10 +213,8 @@ if __name__ == "__main__":
         positions = get_layout_positions(layout_choice, screen_w, screen_h)
         assignments = assign_apps_to_positions(selected, positions)
     else:
-        assignments = [(app, (0, 0, 960, 1080)) for app in selected]  # default position
+        # Posición por defecto si no se usa split
+        assignments = [(app, (0, 0, 960, 1080)) for app in selected]
 
-    # Personaliza estas rutas
-    chrome_path = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
-    nircmd_path = r"C:\Users\Florian\Downloads\snaplauncher\nir\nircmd.exe"
-
-    generate_bat(assignments, chrome_path, nircmd_path)
+    generate_py_script(assignments)
+    generate_close_script(assignments)
